@@ -13,6 +13,7 @@ builder.Services.AddScoped<ISiteTextRepository, SiteTextRepository>();
 builder.Services.AddScoped<IMenuCategoryRepository, MenuCategoryRepository>();
 builder.Services.AddScoped<IMenuItemRepository, MenuItemRepository>();
 builder.Services.AddScoped<IRestaurantInfoRepository, RestaurantInfoRepository>();
+builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
 
 var app = builder.Build();
 

@@ -37,6 +37,16 @@ public class HomeController : Controller
         return View();
     }
 
+    public IActionResult Reservation()
+    {
+        return View();
+    }
+
+    public IActionResult Admin()
+    {
+        return View();
+    }
+
     public IActionResult Error()
     {
         return View();

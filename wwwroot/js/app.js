@@ -49,6 +49,11 @@ async function loadAndRenderAll() {
     } else if (path === '/home/contact') {
         if (exists('page-hero-section')) renderPageHero();
         if (exists('contact-section')) renderContactSection();
+    } else if (path === '/home/reservation') {
+        if (exists('page-hero-section')) renderPageHero();
+        if (exists('reservation-section')) await renderReservationSection();
+    } else if (path === '/home/admin') {
+        if (exists('admin-reservations')) await renderAdminReservations();
     }
 }
 
@@ -79,6 +84,7 @@ function renderHeader() {
                     ${navLink('/Home/Menu', t('NavMenu'), ['/home/menu'])}
                     ${navLink('/Home/About', t('NavAbout'), ['/home/about'])}
                     ${navLink('/Home/Contact', t('NavContact'), ['/home/contact'])}
+                    ${navLink('/Home/Reservation', tOr('NavReservation', 'დაჯავშნა'), ['/home/reservation'])}
                 </nav>
 
                 <div class="header-actions">
@@ -469,6 +475,284 @@ function renderContactSection() {
             </div>
         </div>
     `;
+}
+
+// ============================================
+// RESERVATION
+// ============================================
+let reservationCart = {}; // { menuItemId: quantity }
+
+async function renderReservationSection() {
+    const container = document.getElementById('reservation-section');
+    if (!container) return;
+
+    const [categories, items] = await Promise.all([
+        API.get('MenuCategory', currentLang),
+        API.get('MenuItem', currentLang)
+    ]);
+
+    if (!categories || !items) return;
+
+    reservationCart = {};
+
+    let menuHtml = '';
+    categories.forEach(cat => {
+        const catItems = items.filter(i => i.categoryId === cat.id);
+        if (catItems.length === 0) return;
+
+        const itemsHtml = catItems.map(item => `
+            <div class="res-item-row" data-item-id="${item.id}" data-price="${item.price}">
+                <div class="res-item-info">
+                    <span class="res-item-name">${item.name}</span>
+                    <span class="res-item-price">${fmtPrice(item.price)}</span>
+                </div>
+                <div class="res-qty-control">
+                    <button type="button" class="qty-btn qty-minus" data-item-id="${item.id}">−</button>
+                    <span class="qty-value" id="qty-${item.id}">0</span>
+                    <button type="button" class="qty-btn qty-plus" data-item-id="${item.id}">+</button>
+                </div>
+            </div>
+        `).join('');
+
+        menuHtml += `
+            <div class="res-category-block">
+                <h4 class="res-category-title">${cat.name}</h4>
+                ${itemsHtml}
+            </div>
+        `;
+    });
+
+    container.innerHTML = `
+        <div class="container section">
+            <form id="reservationForm" class="reservation-form">
+                <div class="res-form-grid">
+                    <div class="res-field">
+                        <label>${tOr('LabelName', 'სახელი')}</label>
+                        <input type="text" id="resName" required />
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelPhoneField', 'ტელეფონი')}</label>
+                        <input type="tel" id="resPhone" required />
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelDate', 'თარიღი')}</label>
+                        <input type="date" id="resDate" required />
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelTime', 'დრო')}</label>
+                        <input type="time" id="resTime" required />
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelGuests', 'სტუმრების რაოდენობა')}</label>
+                        <input type="number" id="resGuests" min="1" value="1" required />
+                    </div>
+                </div>
+
+                <h3 class="res-menu-title">${tOr('LabelChooseFood', 'აირჩიეთ კერძები')}</h3>
+                <div class="res-menu-list">
+                    ${menuHtml}
+                </div>
+
+                <div class="res-summary" id="resSummary">
+                    <div class="res-summary-row">
+                        <span>${tOr('LabelTotal', 'სრული თანხა')}</span>
+                        <span id="resTotal">0.00₾</span>
+                    </div>
+                    <div class="res-summary-row">
+                        <span>${tOr('LabelPrepaid', 'წინასწარ გადასახდელი (50%)')}</span>
+                        <span id="resPrepaid">0.00₾</span>
+                    </div>
+                    <div class="res-summary-row">
+                        <span>${tOr('LabelRemaining', 'დარჩენილი (რესტორანში)')}</span>
+                        <span id="resRemaining">0.00₾</span>
+                    </div>
+                </div>
+
+                <div id="resMessage" class="res-message"></div>
+
+                <button type="submit" class="btn btn-gold res-submit-btn">${tOr('BtnSubmitReservation', 'დაჯავშნა')}</button>
+            </form>
+        </div>
+    `;
+
+    initReservationForm();
+}
+
+function initReservationForm() {
+    const container = document.getElementById('reservation-section');
+
+    container.querySelectorAll('.qty-plus').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.dataset.itemId;
+            reservationCart[id] = (reservationCart[id] || 0) + 1;
+            updateReservationUI(id);
+        });
+    });
+
+    container.querySelectorAll('.qty-minus').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.dataset.itemId;
+            const current = reservationCart[id] || 0;
+            if (current > 0) {
+                reservationCart[id] = current - 1;
+                updateReservationUI(id);
+            }
+        });
+    });
+
+    document.getElementById('reservationForm').addEventListener('submit', submitReservation);
+}
+
+function updateReservationUI(itemId) {
+    const qty = reservationCart[itemId] || 0;
+    const qtyEl = document.getElementById(`qty-${itemId}`);
+    if (qtyEl) qtyEl.textContent = qty;
+
+    recalcReservationTotals();
+}
+
+function recalcReservationTotals() {
+    const container = document.getElementById('reservation-section');
+    let total = 0;
+
+    container.querySelectorAll('.res-item-row').forEach(row => {
+        const id = row.dataset.itemId;
+        const price = parseFloat(row.dataset.price);
+        const qty = reservationCart[id] || 0;
+        total += price * qty;
+    });
+
+    const prepaid = total * 0.5;
+    const remaining = total - prepaid;
+
+    document.getElementById('resTotal').textContent = fmtPrice(total.toFixed(2));
+    document.getElementById('resPrepaid').textContent = fmtPrice(prepaid.toFixed(2));
+    document.getElementById('resRemaining').textContent = fmtPrice(remaining.toFixed(2));
+}
+
+async function submitReservation(e) {
+    e.preventDefault();
+
+    const messageEl = document.getElementById('resMessage');
+    messageEl.textContent = '';
+    messageEl.className = 'res-message';
+
+    const items = Object.entries(reservationCart)
+        .filter(([id, qty]) => qty > 0)
+        .map(([id, qty]) => ({ menuItemId: parseInt(id), quantity: qty }));
+
+    if (items.length === 0) {
+        messageEl.textContent = tOr('ErrorNoItems', 'გთხოვთ აირჩიოთ მინიმუმ ერთი კერძი');
+        messageEl.className = 'res-message error';
+        return;
+    }
+
+    const payload = {
+        customerName: document.getElementById('resName').value,
+        phone: document.getElementById('resPhone').value,
+        reservationDate: document.getElementById('resDate').value,
+        reservationTime: document.getElementById('resTime').value,
+        guestCount: parseInt(document.getElementById('resGuests').value),
+        items: items
+    };
+
+    const submitBtn = document.querySelector('.res-submit-btn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = tOr('BtnSubmitting', 'იგზავნება...');
+
+    try {
+        const response = await fetch('/api/Reservation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            messageEl.textContent = data.error || tOr('ErrorGeneric', 'დაფიქსირდა შეცდომა');
+            messageEl.className = 'res-message error';
+            submitBtn.disabled = false;
+            submitBtn.textContent = tOr('BtnSubmitReservation', 'დაჯავშნა');
+            return;
+        }
+
+        messageEl.textContent = tOr('ReservationSuccess', 'თქვენი ჯავშანი წარმატებით შესრულდა!');
+        messageEl.className = 'res-message success';
+        document.getElementById('reservationForm').reset();
+        reservationCart = {};
+        document.querySelectorAll('.qty-value').forEach(el => el.textContent = '0');
+        recalcReservationTotals();
+        submitBtn.disabled = false;
+        submitBtn.textContent = tOr('BtnSubmitReservation', 'დაჯავშნა');
+
+    } catch (err) {
+        messageEl.textContent = tOr('ErrorGeneric', 'დაფიქსირდა შეცდომა, სცადეთ ხელახლა');
+        messageEl.className = 'res-message error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = tOr('BtnSubmitReservation', 'დაჯავშნა');
+    }
+}
+
+// ============================================
+// ADMIN — RESERVATIONS LIST
+// ============================================
+async function renderAdminReservations() {
+    const container = document.getElementById('admin-reservations');
+    if (!container) return;
+
+    container.innerHTML = '<p>იტვირთება...</p>';
+
+    try {
+        const response = await fetch('/api/Reservation');
+        const reservations = await response.json();
+
+        if (!reservations || reservations.length === 0) {
+            container.innerHTML = '<p>ჯერ არცერთი ჯავშანი არ არის.</p>';
+            return;
+        }
+
+        const rowsHtml = reservations.map(r => {
+            const itemsHtml = r.items.map(i =>
+                `<div class="admin-item-line">${i.menuItemName} × ${i.quantity} = ${i.lineTotal.toFixed(2)}₾</div>`
+            ).join('');
+
+            return `
+                <div class="admin-card">
+                    <div class="admin-card-header">
+                        <div>
+                            <strong>${r.customerName}</strong> — ${r.phone}
+                        </div>
+                        <div class="admin-status">
+                            <span class="badge status-${r.reservationStatus.toLowerCase()}">${r.reservationStatus}</span>
+                            <span class="badge payment-${r.paymentStatus.toLowerCase()}">${r.paymentStatus}</span>
+                        </div>
+                    </div>
+                    <div class="admin-card-body">
+                        <div class="admin-info-row">
+                            <span>📅 ${r.reservationDate}</span>
+                            <span>🕐 ${r.reservationTime}</span>
+                            <span>👥 ${r.guestCount} სტუმარი</span>
+                        </div>
+                        <div class="admin-items-list">
+                            ${itemsHtml}
+                        </div>
+                        <div class="admin-totals">
+                            <span>სრული: <strong>${r.totalAmount.toFixed(2)}₾</strong></span>
+                            <span>წინასწარ: <strong>${r.prepaidAmount.toFixed(2)}₾</strong></span>
+                            <span>დარჩენილი: <strong>${r.remainingAmount.toFixed(2)}₾</strong></span>
+                        </div>
+                        <div class="admin-created">შეკვეთის დრო: ${r.createdAt}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        container.innerHTML = `<div class="admin-cards-wrap">${rowsHtml}</div>`;
+
+    } catch (err) {
+        container.innerHTML = '<p>შეცდომა მონაცემების ჩატვირთვისას.</p>';
+    }
 }
 
 document.addEventListener('DOMContentLoaded', loadAndRenderAll);
