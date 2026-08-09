@@ -11,10 +11,12 @@ public class Reservation
     public decimal TotalAmount { get; set; }
     public decimal PrepaidAmount { get; set; }
     public decimal RemainingAmount { get; set; }
-    public string ReservationStatus { get; set; } = "Pending";
-    public string PaymentStatus { get; set; } = "Unpaid";
+    public string ReservationStatus { get; set; } = "Active";
     public DateTime CreatedAt { get; set; }
 
-    // მხოლოდ წაკითხვისთვის — admin გვერდზე ერთად საჩვენებლად
+    public bool IsActive { get; set; } = true;
+    public string DepositPaymentStatus { get; set; } = "Unpaid";
+    public string FinalPaymentStatus { get; set; } = "Unpaid";
+
     public List<ReservationItem> Items { get; set; } = new();
 }

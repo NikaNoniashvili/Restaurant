@@ -101,8 +101,7 @@ public class ReservationController : ControllerBase
             TotalAmount = totalAmount,
             PrepaidAmount = prepaidAmount,
             RemainingAmount = remainingAmount,
-            ReservationStatus = "Pending",
-            PaymentStatus = "Unpaid"
+            ReservationStatus = "Active"
         };
 
         int newId = _reservationRepository.Create(reservation, reservationItems);
@@ -136,7 +135,9 @@ public class ReservationController : ControllerBase
             r.PrepaidAmount,
             r.RemainingAmount,
             r.ReservationStatus,
-            r.PaymentStatus,
+            r.IsActive,
+            r.DepositPaymentStatus,
+            r.FinalPaymentStatus,
             CreatedAt = r.CreatedAt.ToString("yyyy-MM-dd HH:mm"),
             Items = r.Items.Select(i => new
             {
