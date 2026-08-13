@@ -17,6 +17,8 @@ public class Reservation
     public bool IsActive { get; set; } = true;
     public string DepositPaymentStatus { get; set; } = "Unpaid";
     public string FinalPaymentStatus { get; set; } = "Unpaid";
+    public DateTime? DepositPaidAt { get; set; }
+    public DateTime? FinalPaidAt { get; set; }
 
     public List<ReservationItem> Items { get; set; } = new();
 }

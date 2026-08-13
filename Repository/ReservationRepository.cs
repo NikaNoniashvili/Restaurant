@@ -98,31 +98,25 @@ public class ReservationRepository : IReservationRepository
     // ==========================================
     // GetActive — IsActive = true
     // ==========================================
-    public List<Reservation> GetActive()
+    public List<Reservation> GetActive(string? searchTerm = null)
     {
-        return GetByFilter(true);
+        return GetByFilter(true, searchTerm);
     }
 
-    // ==========================================
-    // GetCompleted — ReservationStatus = 'Completed'
-    // ==========================================
-    public List<Reservation> GetCompleted()
+    public List<Reservation> GetCompleted(string? searchTerm = null)
     {
-        return GetByStatus("Completed");
+        return GetByStatus("Completed", searchTerm);
     }
 
-    // ==========================================
-    // GetCancelled — ReservationStatus = 'Cancelled'
-    // ==========================================
-    public List<Reservation> GetCancelled()
+    public List<Reservation> GetCancelled(string? searchTerm = null)
     {
-        return GetByStatus("Cancelled");
+        return GetByStatus("Cancelled", searchTerm);
     }
 
     // ==========================================
     // საერთო private მეთოდი — filter: null = ყველა, true/false = IsActive-ის მიხედვით
     // ==========================================
-    private List<Reservation> GetByFilter(bool? isActive)
+    private List<Reservation> GetByFilter(bool? isActive, string? searchTerm = null)
     {
         var reservations = new List<Reservation>();
 
@@ -131,14 +125,20 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                       TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                       IsActive, DepositPaymentStatus, FinalPaymentStatus
-                FROM Reservation";
+            SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
+                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
+                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
+            FROM Reservation
+            WHERE 1 = 1";
 
             if (isActive.HasValue)
             {
-                query += " WHERE IsActive = @IsActive";
+                query += " AND IsActive = @IsActive";
+            }
+
+            if (!string.IsNullOrWhiteSpace(searchTerm))
+            {
+                query += " AND (CustomerName LIKE @SearchTerm OR Phone LIKE @SearchTerm)";
             }
 
             query += " ORDER BY ReservationDate ASC, ReservationTime ASC";
@@ -148,6 +148,11 @@ public class ReservationRepository : IReservationRepository
                 if (isActive.HasValue)
                 {
                     cmd.Parameters.AddWithValue("@IsActive", isActive.Value);
+                }
+
+                if (!string.IsNullOrWhiteSpace(searchTerm))
+                {
+                    cmd.Parameters.AddWithValue("@SearchTerm", "%" + searchTerm.Trim() + "%");
                 }
 
                 using (var reader = cmd.ExecuteReader())
@@ -171,7 +176,7 @@ public class ReservationRepository : IReservationRepository
     // ==========================================
     // საერთო private მეთოდი — კონკრეტული ReservationStatus-ის მიხედვით
     // ==========================================
-    private List<Reservation> GetByStatus(string status)
+    private List<Reservation> GetByStatus(string status, string? searchTerm = null)
     {
         var reservations = new List<Reservation>();
 
@@ -180,16 +185,27 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                       TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                       IsActive, DepositPaymentStatus, FinalPaymentStatus
-                FROM Reservation
-                WHERE ReservationStatus = @Status
-                ORDER BY ReservationDate DESC, ReservationTime DESC";
+            SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
+                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
+                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
+            FROM Reservation
+            WHERE ReservationStatus = @Status";
+
+            if (!string.IsNullOrWhiteSpace(searchTerm))
+            {
+                query += " AND (CustomerName LIKE @SearchTerm OR Phone LIKE @SearchTerm)";
+            }
+
+            query += " ORDER BY ReservationDate DESC, ReservationTime DESC";
 
             using (var cmd = new SqlCommand(query, connection))
             {
                 cmd.Parameters.AddWithValue("@Status", status);
+
+                if (!string.IsNullOrWhiteSpace(searchTerm))
+                {
+                    cmd.Parameters.AddWithValue("@SearchTerm", "%" + searchTerm.Trim() + "%");
+                }
 
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -219,10 +235,10 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                       TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                       IsActive, DepositPaymentStatus, FinalPaymentStatus
-                FROM Reservation
+                              SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
+                                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
+                                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
+                                        FROM Reservation
                 WHERE Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
@@ -255,13 +271,15 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                UPDATE Reservation
-                SET DepositPaymentStatus = 'Paid'
-                WHERE Id = @Id";
+            UPDATE Reservation
+            SET DepositPaymentStatus = 'Paid',
+                DepositPaidAt = @PaidAt
+            WHERE Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
             {
                 cmd.Parameters.AddWithValue("@Id", reservationId);
+                cmd.Parameters.AddWithValue("@PaidAt", DateTime.Now);
                 cmd.ExecuteNonQuery();
             }
         }
@@ -277,15 +295,17 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                UPDATE Reservation
-                SET FinalPaymentStatus = 'Paid',
-                    ReservationStatus = 'Completed',
-                    IsActive = 0
-                WHERE Id = @Id";
+            UPDATE Reservation
+            SET FinalPaymentStatus = 'Paid',
+                ReservationStatus = 'Completed',
+                IsActive = 0,
+                FinalPaidAt = @PaidAt
+            WHERE Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
             {
                 cmd.Parameters.AddWithValue("@Id", reservationId);
+                cmd.Parameters.AddWithValue("@PaidAt", DateTime.Now);
                 cmd.ExecuteNonQuery();
             }
         }
@@ -360,6 +380,90 @@ public class ReservationRepository : IReservationRepository
     }
 
     // ==========================================
+    // GetMonthlyStatistics — თვის მიხედვით სტატისტიკა კონკრეტული წლისთვის
+    // ==========================================
+    public List<MonthlyStatRow> GetMonthlyStatistics(int year)
+    {
+        var stats = new List<MonthlyStatRow>();
+
+        using (var connection = (SqlConnection)_databaseService.GetConnection())
+        {
+            connection.Open();
+
+            // წინასწარი გადახდები — თვის მიხედვით, DepositPaidAt-ის თარიღით
+            string depositQuery = @"
+            SELECT MONTH(DepositPaidAt) AS MonthNum, 
+                   SUM(PrepaidAmount) AS TotalDeposit
+            FROM Reservation
+            WHERE DepositPaymentStatus = 'Paid' 
+              AND DepositPaidAt IS NOT NULL
+              AND YEAR(DepositPaidAt) = @Year
+            GROUP BY MONTH(DepositPaidAt)";
+
+            var depositByMonth = new Dictionary<int, decimal>();
+            using (var cmd = new SqlCommand(depositQuery, connection))
+            {
+                cmd.Parameters.AddWithValue("@Year", year);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        int month = Convert.ToInt32(reader["MonthNum"]);
+                        decimal total = Convert.ToDecimal(reader["TotalDeposit"]);
+                        depositByMonth[month] = total;
+                    }
+                }
+            }
+
+            // სრული გადახდები — თვის მიხედვით, FinalPaidAt-ის თარიღით
+            string finalQuery = @"
+            SELECT MONTH(FinalPaidAt) AS MonthNum, 
+                   SUM(RemainingAmount) AS TotalFinal,
+                   COUNT(*) AS CompletedCount,
+                   SUM(GuestCount) AS TotalGuests
+            FROM Reservation
+            WHERE FinalPaymentStatus = 'Paid' 
+              AND FinalPaidAt IS NOT NULL
+              AND YEAR(FinalPaidAt) = @Year
+            GROUP BY MONTH(FinalPaidAt)";
+
+            var finalByMonth = new Dictionary<int, (decimal total, int count, int guests)>();
+            using (var cmd = new SqlCommand(finalQuery, connection))
+            {
+                cmd.Parameters.AddWithValue("@Year", year);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        int month = Convert.ToInt32(reader["MonthNum"]);
+                        decimal total = Convert.ToDecimal(reader["TotalFinal"]);
+                        int count = Convert.ToInt32(reader["CompletedCount"]);
+                        int guests = reader["TotalGuests"] == DBNull.Value ? 0 : Convert.ToInt32(reader["TotalGuests"]);
+                        finalByMonth[month] = (total, count, guests);
+                    }
+                }
+            }
+
+            // 12 თვის საბოლოო აწყობა
+            for (int month = 1; month <= 12; month++)
+            {
+                decimal depositTotal = depositByMonth.ContainsKey(month) ? depositByMonth[month] : 0;
+                var finalData = finalByMonth.ContainsKey(month) ? finalByMonth[month] : (0, 0, 0);
+
+                stats.Add(new MonthlyStatRow
+                {
+                    Month = month,
+                    TotalRevenue = depositTotal + finalData.Item1,
+                    CompletedReservations = finalData.Item2,
+                    TotalGuests = finalData.Item3
+                });
+            }
+        }
+
+        return stats;
+    }
+
+    // ==========================================
     // Helper — reader-იდან Reservation object აწყობა
     // ==========================================
     private Reservation MapReservation(SqlDataReader reader)
@@ -379,7 +483,9 @@ public class ReservationRepository : IReservationRepository
             CreatedAt = Convert.ToDateTime(reader["CreatedAt"]),
             IsActive = Convert.ToBoolean(reader["IsActive"]),
             DepositPaymentStatus = reader["DepositPaymentStatus"].ToString() ?? "Unpaid",
-            FinalPaymentStatus = reader["FinalPaymentStatus"].ToString() ?? "Unpaid"
+            FinalPaymentStatus = reader["FinalPaymentStatus"].ToString() ?? "Unpaid",
+            DepositPaidAt = reader["DepositPaidAt"] == DBNull.Value ? null : Convert.ToDateTime(reader["DepositPaidAt"]),
+            FinalPaidAt = reader["FinalPaidAt"] == DBNull.Value ? null : Convert.ToDateTime(reader["FinalPaidAt"])
         };
     }
 }
