@@ -14,6 +14,7 @@ builder.Services.AddScoped<IMenuCategoryRepository, MenuCategoryRepository>();
 builder.Services.AddScoped<IMenuItemRepository, MenuItemRepository>();
 builder.Services.AddScoped<IRestaurantInfoRepository, RestaurantInfoRepository>();
 builder.Services.AddScoped<IReservationRepository, ReservationRepository>();
+builder.Services.AddScoped<ITableRepository, TableRepository>();
 
 var app = builder.Build();
 

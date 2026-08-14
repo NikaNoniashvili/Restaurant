@@ -32,12 +32,12 @@ public class ReservationRepository : IReservationRepository
                         INSERT INTO Reservation 
                             (CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
                              TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                             IsActive, DepositPaymentStatus, FinalPaymentStatus)
+                             IsActive, DepositPaymentStatus, FinalPaymentStatus, TableId, ActualStartTime, ActualEndTime)
                         OUTPUT INSERTED.Id
                         VALUES 
                             (@CustomerName, @Phone, @ReservationDate, @ReservationTime, @GuestCount,
                              @TotalAmount, @PrepaidAmount, @RemainingAmount, @ReservationStatus, @CreatedAt,
-                             @IsActive, @DepositPaymentStatus, @FinalPaymentStatus)";
+                             @IsActive, @DepositPaymentStatus, @FinalPaymentStatus, NULL, NULL, NULL)";
 
                     using (var cmd = new SqlCommand(insertReservation, connection, transaction))
                     {
@@ -49,7 +49,7 @@ public class ReservationRepository : IReservationRepository
                         cmd.Parameters.AddWithValue("@TotalAmount", reservation.TotalAmount);
                         cmd.Parameters.AddWithValue("@PrepaidAmount", reservation.PrepaidAmount);
                         cmd.Parameters.AddWithValue("@RemainingAmount", reservation.RemainingAmount);
-                        cmd.Parameters.AddWithValue("@ReservationStatus", "Active");
+                        cmd.Parameters.AddWithValue("@ReservationStatus", "Pending");
                         cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
                         cmd.Parameters.AddWithValue("@IsActive", true);
                         cmd.Parameters.AddWithValue("@DepositPaymentStatus", "Unpaid");
@@ -88,7 +88,7 @@ public class ReservationRepository : IReservationRepository
     }
 
     // ==========================================
-    // GetAll — ყველა ჯავშანი
+    // GetAll
     // ==========================================
     public List<Reservation> GetAll()
     {
@@ -103,18 +103,69 @@ public class ReservationRepository : IReservationRepository
         return GetByFilter(true, searchTerm);
     }
 
+    // ==========================================
+    // GetCompleted
+    // ==========================================
     public List<Reservation> GetCompleted(string? searchTerm = null)
     {
         return GetByStatus("Completed", searchTerm);
     }
 
+    // ==========================================
+    // GetCancelled
+    // ==========================================
     public List<Reservation> GetCancelled(string? searchTerm = null)
     {
         return GetByStatus("Cancelled", searchTerm);
     }
 
     // ==========================================
-    // საერთო private მეთოდი — filter: null = ყველა, true/false = IsActive-ის მიხედვით
+    // GetByDateAndStatuses — კონკრეტული თარიღის ჯავშნები, სტატუსების სიის მიხედვით
+    // (გამოვიყენებთ "დღეს მაგიდები" ვიზუალისთვის)
+    // ==========================================
+    public List<Reservation> GetByDate(DateTime date)
+    {
+        var reservations = new List<Reservation>();
+
+        using (var connection = (SqlConnection)_databaseService.GetConnection())
+        {
+            connection.Open();
+
+            string query = @"
+                SELECT r.Id, r.CustomerName, r.Phone, r.ReservationDate, r.ReservationTime, r.GuestCount,
+                       r.TotalAmount, r.PrepaidAmount, r.RemainingAmount, r.ReservationStatus, r.CreatedAt,
+                       r.IsActive, r.DepositPaymentStatus, r.FinalPaymentStatus, r.DepositPaidAt, r.FinalPaidAt,
+                       r.TableId, r.ActualStartTime, r.ActualEndTime,
+                       t.TableNumber, t.Capacity AS TableCapacity
+                FROM Reservation r
+                LEFT JOIN [Table] t ON r.TableId = t.Id
+                WHERE r.ReservationDate = @Date
+                ORDER BY r.ReservationTime ASC";
+
+            using (var cmd = new SqlCommand(query, connection))
+            {
+                cmd.Parameters.AddWithValue("@Date", date.Date);
+
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        reservations.Add(MapReservation(reader));
+                    }
+                }
+            }
+        }
+
+        foreach (var reservation in reservations)
+        {
+            reservation.Items = GetItemsByReservationId(reservation.Id);
+        }
+
+        return reservations;
+    }
+
+    // ==========================================
+    // GetByFilter — IsActive-ის მიხედვით, search-ითაც
     // ==========================================
     private List<Reservation> GetByFilter(bool? isActive, string? searchTerm = null)
     {
@@ -125,23 +176,26 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-            SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
-            FROM Reservation
-            WHERE 1 = 1";
+                SELECT r.Id, r.CustomerName, r.Phone, r.ReservationDate, r.ReservationTime, r.GuestCount,
+                       r.TotalAmount, r.PrepaidAmount, r.RemainingAmount, r.ReservationStatus, r.CreatedAt,
+                       r.IsActive, r.DepositPaymentStatus, r.FinalPaymentStatus, r.DepositPaidAt, r.FinalPaidAt,
+                       r.TableId, r.ActualStartTime, r.ActualEndTime,
+                       t.TableNumber, t.Capacity AS TableCapacity
+                FROM Reservation r
+                LEFT JOIN [Table] t ON r.TableId = t.Id
+                WHERE 1 = 1";
 
             if (isActive.HasValue)
             {
-                query += " AND IsActive = @IsActive";
+                query += " AND r.IsActive = @IsActive";
             }
 
             if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                query += " AND (CustomerName LIKE @SearchTerm OR Phone LIKE @SearchTerm)";
+                query += " AND (r.CustomerName LIKE @SearchTerm OR r.Phone LIKE @SearchTerm)";
             }
 
-            query += " ORDER BY ReservationDate ASC, ReservationTime ASC";
+            query += " ORDER BY r.ReservationDate ASC, r.ReservationTime ASC";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -174,7 +228,7 @@ public class ReservationRepository : IReservationRepository
     }
 
     // ==========================================
-    // საერთო private მეთოდი — კონკრეტული ReservationStatus-ის მიხედვით
+    // GetByStatus
     // ==========================================
     private List<Reservation> GetByStatus(string status, string? searchTerm = null)
     {
@@ -185,18 +239,21 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-            SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
-            FROM Reservation
-            WHERE ReservationStatus = @Status";
+                SELECT r.Id, r.CustomerName, r.Phone, r.ReservationDate, r.ReservationTime, r.GuestCount,
+                       r.TotalAmount, r.PrepaidAmount, r.RemainingAmount, r.ReservationStatus, r.CreatedAt,
+                       r.IsActive, r.DepositPaymentStatus, r.FinalPaymentStatus, r.DepositPaidAt, r.FinalPaidAt,
+                       r.TableId, r.ActualStartTime, r.ActualEndTime,
+                       t.TableNumber, t.Capacity AS TableCapacity
+                FROM Reservation r
+                LEFT JOIN [Table] t ON r.TableId = t.Id
+                WHERE r.ReservationStatus = @Status";
 
             if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                query += " AND (CustomerName LIKE @SearchTerm OR Phone LIKE @SearchTerm)";
+                query += " AND (r.CustomerName LIKE @SearchTerm OR r.Phone LIKE @SearchTerm)";
             }
 
-            query += " ORDER BY ReservationDate DESC, ReservationTime DESC";
+            query += " ORDER BY r.ReservationDate DESC, r.ReservationTime DESC";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -235,11 +292,14 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-                              SELECT Id, CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                                   TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                                   IsActive, DepositPaymentStatus, FinalPaymentStatus, DepositPaidAt, FinalPaidAt
-                                        FROM Reservation
-                WHERE Id = @Id";
+                SELECT r.Id, r.CustomerName, r.Phone, r.ReservationDate, r.ReservationTime, r.GuestCount,
+                       r.TotalAmount, r.PrepaidAmount, r.RemainingAmount, r.ReservationStatus, r.CreatedAt,
+                       r.IsActive, r.DepositPaymentStatus, r.FinalPaymentStatus, r.DepositPaidAt, r.FinalPaidAt,
+                       r.TableId, r.ActualStartTime, r.ActualEndTime,
+                       t.TableNumber, t.Capacity AS TableCapacity
+                FROM Reservation r
+                LEFT JOIN [Table] t ON r.TableId = t.Id
+                WHERE r.Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -262,7 +322,7 @@ public class ReservationRepository : IReservationRepository
     }
 
     // ==========================================
-    // MarkDepositPaid
+    // MarkDepositPaid — Pending → Confirmed
     // ==========================================
     public void MarkDepositPaid(int reservationId)
     {
@@ -271,10 +331,11 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-            UPDATE Reservation
-            SET DepositPaymentStatus = 'Paid',
-                DepositPaidAt = @PaidAt
-            WHERE Id = @Id";
+                UPDATE Reservation
+                SET DepositPaymentStatus = 'Paid',
+                    DepositPaidAt = @PaidAt,
+                    ReservationStatus = 'Confirmed'
+                WHERE Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -286,7 +347,54 @@ public class ReservationRepository : IReservationRepository
     }
 
     // ==========================================
-    // MarkFinalPaid — სრული გადახდა → Completed
+    // ✅ AssignTable — მაგიდის მინიჭება (Admin Panel-იდან)
+    // ==========================================
+    public void AssignTable(int reservationId, int tableId)
+    {
+        using (var connection = (SqlConnection)_databaseService.GetConnection())
+        {
+            connection.Open();
+
+            string query = "UPDATE Reservation SET TableId = @TableId WHERE Id = @Id";
+
+            using (var cmd = new SqlCommand(query, connection))
+            {
+                cmd.Parameters.AddWithValue("@Id", reservationId);
+                cmd.Parameters.AddWithValue("@TableId", tableId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
+    // ==========================================
+    // ✅ StartReservation — "მაგიდა დაკავებულია / დაწყება"
+    // Confirmed → InProgress, ActualStartTime დაფიქსირდეს
+    // ==========================================
+    public void StartReservation(int reservationId)
+    {
+        using (var connection = (SqlConnection)_databaseService.GetConnection())
+        {
+            connection.Open();
+
+            string query = @"
+                UPDATE Reservation
+                SET ReservationStatus = 'InProgress',
+                    ActualStartTime = @StartTime
+                WHERE Id = @Id";
+
+            using (var cmd = new SqlCommand(query, connection))
+            {
+                cmd.Parameters.AddWithValue("@Id", reservationId);
+                cmd.Parameters.AddWithValue("@StartTime", DateTime.Now);
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
+    // ==========================================
+    // MarkFinalPaid — InProgress → Completed
+    // ActualEndTime დაფიქსირდეს, მაგიდა თავისუფლდება (TableId რჩება ისტორიისთვის, 
+    // მაგრამ IsActive=0-ის და status=Completed-ის გამო აღარ ითვლება დაკავებულად)
     // ==========================================
     public void MarkFinalPaid(int reservationId)
     {
@@ -295,25 +403,26 @@ public class ReservationRepository : IReservationRepository
             connection.Open();
 
             string query = @"
-            UPDATE Reservation
-            SET FinalPaymentStatus = 'Paid',
-                ReservationStatus = 'Completed',
-                IsActive = 0,
-                FinalPaidAt = @PaidAt
-            WHERE Id = @Id";
+                UPDATE Reservation
+                SET FinalPaymentStatus = 'Paid',
+                    ReservationStatus = 'Completed',
+                    IsActive = 0,
+                    FinalPaidAt = @PaidAt,
+                    ActualEndTime = @EndTime
+                WHERE Id = @Id";
 
             using (var cmd = new SqlCommand(query, connection))
             {
                 cmd.Parameters.AddWithValue("@Id", reservationId);
                 cmd.Parameters.AddWithValue("@PaidAt", DateTime.Now);
+                cmd.Parameters.AddWithValue("@EndTime", DateTime.Now);
                 cmd.ExecuteNonQuery();
             }
         }
     }
 
     // ==========================================
-    // CancelReservation — გაუქმება → Cancelled
-    // (გადახდის ისტორია უცვლელი რჩება)
+    // CancelReservation — გაუქმება
     // ==========================================
     public void CancelReservation(int reservationId)
     {
@@ -390,7 +499,6 @@ public class ReservationRepository : IReservationRepository
         {
             connection.Open();
 
-            // წინასწარი გადახდები — თვის მიხედვით, DepositPaidAt-ის თარიღით
             string depositQuery = @"
             SELECT MONTH(DepositPaidAt) AS MonthNum, 
                    SUM(PrepaidAmount) AS TotalDeposit
@@ -415,7 +523,6 @@ public class ReservationRepository : IReservationRepository
                 }
             }
 
-            // სრული გადახდები — თვის მიხედვით, FinalPaidAt-ის თარიღით
             string finalQuery = @"
             SELECT MONTH(FinalPaidAt) AS MonthNum, 
                    SUM(RemainingAmount) AS TotalFinal,
@@ -444,7 +551,6 @@ public class ReservationRepository : IReservationRepository
                 }
             }
 
-            // 12 თვის საბოლოო აწყობა
             for (int month = 1; month <= 12; month++)
             {
                 decimal depositTotal = depositByMonth.ContainsKey(month) ? depositByMonth[month] : 0;
@@ -479,13 +585,18 @@ public class ReservationRepository : IReservationRepository
             TotalAmount = Convert.ToDecimal(reader["TotalAmount"]),
             PrepaidAmount = Convert.ToDecimal(reader["PrepaidAmount"]),
             RemainingAmount = Convert.ToDecimal(reader["RemainingAmount"]),
-            ReservationStatus = reader["ReservationStatus"].ToString() ?? "Active",
+            ReservationStatus = reader["ReservationStatus"].ToString() ?? "Pending",
             CreatedAt = Convert.ToDateTime(reader["CreatedAt"]),
             IsActive = Convert.ToBoolean(reader["IsActive"]),
             DepositPaymentStatus = reader["DepositPaymentStatus"].ToString() ?? "Unpaid",
             FinalPaymentStatus = reader["FinalPaymentStatus"].ToString() ?? "Unpaid",
             DepositPaidAt = reader["DepositPaidAt"] == DBNull.Value ? null : Convert.ToDateTime(reader["DepositPaidAt"]),
-            FinalPaidAt = reader["FinalPaidAt"] == DBNull.Value ? null : Convert.ToDateTime(reader["FinalPaidAt"])
+            FinalPaidAt = reader["FinalPaidAt"] == DBNull.Value ? null : Convert.ToDateTime(reader["FinalPaidAt"]),
+            TableId = reader["TableId"] == DBNull.Value ? null : Convert.ToInt32(reader["TableId"]),
+            ActualStartTime = reader["ActualStartTime"] == DBNull.Value ? null : Convert.ToDateTime(reader["ActualStartTime"]),
+            ActualEndTime = reader["ActualEndTime"] == DBNull.Value ? null : Convert.ToDateTime(reader["ActualEndTime"]),
+            TableNumber = reader["TableNumber"] == DBNull.Value ? null : Convert.ToInt32(reader["TableNumber"]),
+            TableCapacity = reader["TableCapacity"] == DBNull.Value ? null : Convert.ToInt32(reader["TableCapacity"])
         };
     }
 }
