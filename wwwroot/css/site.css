@@ -1474,3 +1474,16 @@ img {
         gap: 8px;
     }
 }
+
+.field-error {
+    color: #dc3545;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 16px;
+    display: block;
+}
+
+.field-invalid {
+    border-color: #dc3545 !important;
+    background: #fff5f5;
+}

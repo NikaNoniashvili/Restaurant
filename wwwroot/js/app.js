@@ -500,8 +500,11 @@ async function renderReservationSection() {
         const catItems = items.filter(i => i.categoryId === cat.id);
         if (catItems.length === 0) return;
 
+        const isKhinkali = cat.name.includes('ხინკალი') || cat.name.toLowerCase().includes('khinkali');
+        const step = isKhinkali ? 5 : 1;
+
         const itemsHtml = catItems.map(item => `
-            <div class="res-item-row" data-item-id="${item.id}" data-price="${item.price}">
+    <div class="res-item-row" data-item-id="${item.id}" data-price="${item.price}" data-step="${step}">
                 <div class="res-item-info">
                     <span class="res-item-name">${item.name}</span>
                     <span class="res-item-price">${fmtPrice(item.price)}</span>
@@ -526,18 +529,21 @@ async function renderReservationSection() {
         <div class="container section">
             <form id="reservationForm" class="reservation-form">
                 <div class="res-form-grid">
-                    <div class="res-field">
-                        <label>${tOr('LabelName', 'სახელი')}</label>
-                        <input type="text" id="resName" required />
-                    </div>
-                    <div class="res-field">
-                        <label>${tOr('LabelPhoneField', 'ტელეფონი')}</label>
-                        <input type="tel" id="resPhone" required />
-                    </div>
-                    <div class="res-field">
-                        <label>${tOr('LabelDate', 'თარიღი')}</label>
-                        <input type="date" id="resDate" required />
-                    </div>
+                   <div class="res-field">
+    <label>${tOr('LabelName', 'სახელი')}</label>
+    <input type="text" id="resName" required minlength="2" maxlength="10" placeholder="მხოლოდ ასოები" />
+    <span class="field-error" id="resNameError"></span>
+</div>
+<div class="res-field">
+    <label>${tOr('LabelPhoneField', 'ტელეფონი')}</label>
+    <input type="tel" id="resPhone" required maxlength="9" inputmode="numeric" placeholder="9 ციფრი, მაგ: 555223344" />
+    <span class="field-error" id="resPhoneError"></span>
+</div>
+<div class="res-field">
+    <label>${tOr('LabelDate', 'თარიღი')}</label>
+    <input type="date" id="resDate" required />
+    <span class="field-error" id="resDateError"></span>
+</div>
                     <div class="res-field">
                         <label>${tOr('LabelTime', 'დრო')}</label>
                         <input type="time" id="resTime" required />
@@ -584,7 +590,9 @@ function initReservationForm() {
     container.querySelectorAll('.qty-plus').forEach(btn => {
         btn.addEventListener('click', () => {
             const id = btn.dataset.itemId;
-            reservationCart[id] = (reservationCart[id] || 0) + 1;
+            const row = container.querySelector(`.res-item-row[data-item-id="${id}"]`);
+            const step = parseInt(row?.dataset.step || '1');
+            reservationCart[id] = (reservationCart[id] || 0) + step;
             updateReservationUI(id);
         });
     });
@@ -592,13 +600,40 @@ function initReservationForm() {
     container.querySelectorAll('.qty-minus').forEach(btn => {
         btn.addEventListener('click', () => {
             const id = btn.dataset.itemId;
+            const row = container.querySelector(`.res-item-row[data-item-id="${id}"]`);
+            const step = parseInt(row?.dataset.step || '1');
             const current = reservationCart[id] || 0;
-            if (current > 0) {
-                reservationCart[id] = current - 1;
+            if (current >= step) {
+                reservationCart[id] = current - step;
                 updateReservationUI(id);
             }
         });
     });
+
+    // ✅ თარიღის მინიმუმი — ხვალინდელი დღე (დღეს დაჯავშნა აკრძალულია)
+    const dateInput = document.getElementById('resDate');
+    if (dateInput) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const minDate = tomorrow.toISOString().split('T')[0];
+        dateInput.setAttribute('min', minDate);
+    }
+
+    // ✅ სახელის ველი — მხოლოდ ასოები (ქართული/ლათინური), ციფრი/სიმბოლო/emoji დაუყოვნებლივ იბლოკება
+    const nameInput = document.getElementById('resName');
+    if (nameInput) {
+        nameInput.addEventListener('input', () => {
+            nameInput.value = nameInput.value.replace(/[^a-zA-Zა-ჰ]/g, '');
+        });
+    }
+
+    // ✅ ტელეფონის ველი — მხოლოდ ციფრები, მაქსიმუმ 9
+    const phoneInput = document.getElementById('resPhone');
+    if (phoneInput) {
+        phoneInput.addEventListener('input', () => {
+            phoneInput.value = phoneInput.value.replace(/\D/g, '').slice(0, 9);
+        });
+    }
 
     document.getElementById('reservationForm').addEventListener('submit', submitReservation);
 }
@@ -637,6 +672,68 @@ async function submitReservation(e) {
     messageEl.textContent = '';
     messageEl.className = 'res-message';
 
+    const nameInput = document.getElementById('resName');
+    const phoneInput = document.getElementById('resPhone');
+    const dateInput = document.getElementById('resDate');
+    const timeInput = document.getElementById('resTime');
+    const guestsInput = document.getElementById('resGuests');
+
+    // ველების error-ებისა და წითელი ჩარჩოების გასუფთავება
+    [nameInput, phoneInput, dateInput, timeInput, guestsInput].forEach(el => el.classList.remove('field-invalid'));
+    document.getElementById('resNameError').textContent = '';
+    document.getElementById('resPhoneError').textContent = '';
+    document.getElementById('resDateError').textContent = '';
+
+    const nameVal = nameInput.value.trim();
+    const phoneVal = phoneInput.value.trim();
+    const dateVal = dateInput.value;
+    const timeVal = timeInput.value;
+    const guestsVal = guestsInput.value;
+
+    let hasError = false;
+
+    // ✅ სახელის ვალიდაცია — 2-10 ასო, მხოლოდ ასოები
+    if (nameVal.length < 2 || nameVal.length > 10 || !/^[a-zA-Zა-ჰ]+$/.test(nameVal)) {
+        document.getElementById('resNameError').textContent = 'სახელი უნდა იყოს 2-10 ასო, მხოლოდ ასოებით';
+        nameInput.classList.add('field-invalid');
+        hasError = true;
+    }
+
+    // ✅ ტელეფონის ვალიდაცია — ზუსტად 9 ციფრი
+    if (!/^\d{9}$/.test(phoneVal)) {
+        document.getElementById('resPhoneError').textContent = 'ტელეფონი უნდა შეიცავდეს ზუსტად 9 ციფრს';
+        phoneInput.classList.add('field-invalid');
+        hasError = true;
+    }
+
+    // ✅ თარიღის ვალიდაცია — არანაკლებ ხვალინდელი დღისა
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    const selectedDate = dateVal ? new Date(dateVal) : null;
+
+    if (!dateVal || selectedDate < tomorrow) {
+        document.getElementById('resDateError').textContent = 'დაჯავშნა შესაძლებელია მხოლოდ ხვალინდელი დღიდან';
+        dateInput.classList.add('field-invalid');
+        hasError = true;
+    }
+
+    // ✅ დროის ვალიდაცია — სავალდებულოა
+    if (!timeVal) {
+        timeInput.classList.add('field-invalid');
+        hasError = true;
+    }
+
+    // ✅ სტუმრების რაოდენობა — სავალდებულოა, მინიმუმ 1
+    if (!guestsVal || parseInt(guestsVal) < 1) {
+        guestsInput.classList.add('field-invalid');
+        hasError = true;
+    }
+
+    if (hasError) {
+        return;
+    }
+
     const items = Object.entries(reservationCart)
         .filter(([id, qty]) => qty > 0)
         .map(([id, qty]) => ({ menuItemId: parseInt(id), quantity: qty }));
@@ -648,11 +745,11 @@ async function submitReservation(e) {
     }
 
     const payload = {
-        customerName: document.getElementById('resName').value,
-        phone: document.getElementById('resPhone').value,
-        reservationDate: document.getElementById('resDate').value,
-        reservationTime: document.getElementById('resTime').value,
-        guestCount: parseInt(document.getElementById('resGuests').value),
+        customerName: nameVal,
+        phone: phoneVal,
+        reservationDate: dateVal,
+        reservationTime: timeVal,
+        guestCount: parseInt(guestsVal),
         items: items
     };
 
