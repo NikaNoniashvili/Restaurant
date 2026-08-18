@@ -17,7 +17,7 @@ public class MenuCategoryController : ControllerBase
     [HttpGet]
     public IActionResult Get([FromQuery] string lang = "ka")
     {
-        var items = _repository.GetAll();
+        var items = _repository.GetActive(); // ✅ მხოლოდ აქტიური კატეგორიები საიტისთვის
 
         var result = items.Select(c => new
         {
