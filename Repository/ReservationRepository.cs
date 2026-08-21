@@ -59,8 +59,8 @@ public class ReservationRepository : IReservationRepository
                     }
 
                     string insertItem = @"
-                        INSERT INTO ReservationItem (ReservationId, MenuItemId, Quantity, UnitPrice, LineTotal)
-                        VALUES (@ReservationId, @MenuItemId, @Quantity, @UnitPrice, @LineTotal)";
+    INSERT INTO ReservationItem (ReservationId, MenuItemId, Quantity, UnitPrice, LineTotal, NameSnapshot)
+    VALUES (@ReservationId, @MenuItemId, @Quantity, @UnitPrice, @LineTotal, @NameSnapshot)";
 
                     foreach (var item in items)
                     {
@@ -71,6 +71,7 @@ public class ReservationRepository : IReservationRepository
                             cmd.Parameters.AddWithValue("@Quantity", item.Quantity);
                             cmd.Parameters.AddWithValue("@UnitPrice", item.UnitPrice);
                             cmd.Parameters.AddWithValue("@LineTotal", item.LineTotal);
+                            cmd.Parameters.AddWithValue("@NameSnapshot", item.NameSnapshot);
                             cmd.ExecuteNonQuery();
                         }
                     }
@@ -455,12 +456,13 @@ public class ReservationRepository : IReservationRepository
         {
             connection.Open();
 
+            // ✅ INNER JOIN აღარ გვჭირდება — სახელს ვკითხულობთ NameSnapshot-იდან,
+            // ეს ასევე ნიშნავს, რომ თუ MenuItem შემდგომში წაიშლება (თეორიულად), 
+            // ისტორია მაინც უცვლელი დარჩება
             string query = @"
-                SELECT ri.Id, ri.ReservationId, ri.MenuItemId, ri.Quantity, ri.UnitPrice, ri.LineTotal,
-                       mi.NameKa AS MenuItemName
-                FROM ReservationItem ri
-                INNER JOIN MenuItem mi ON ri.MenuItemId = mi.Id
-                WHERE ri.ReservationId = @ReservationId";
+            SELECT Id, ReservationId, MenuItemId, Quantity, UnitPrice, LineTotal, NameSnapshot
+            FROM ReservationItem
+            WHERE ReservationId = @ReservationId";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -470,6 +472,8 @@ public class ReservationRepository : IReservationRepository
                 {
                     while (reader.Read())
                     {
+                        string nameSnapshot = reader["NameSnapshot"].ToString() ?? string.Empty;
+
                         items.Add(new ReservationItem
                         {
                             Id = Convert.ToInt32(reader["Id"]),
@@ -478,7 +482,8 @@ public class ReservationRepository : IReservationRepository
                             Quantity = Convert.ToInt32(reader["Quantity"]),
                             UnitPrice = Convert.ToDecimal(reader["UnitPrice"]),
                             LineTotal = Convert.ToDecimal(reader["LineTotal"]),
-                            MenuItemName = reader["MenuItemName"].ToString() ?? string.Empty
+                            NameSnapshot = nameSnapshot,
+                            MenuItemName = nameSnapshot // ✅ Admin View-ები უცვლელად აგრძელებენ მუშაობას
                         });
                     }
                 }

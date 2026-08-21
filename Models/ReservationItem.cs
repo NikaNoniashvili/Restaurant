@@ -9,6 +9,10 @@ public class ReservationItem
     public decimal UnitPrice { get; set; }
     public decimal LineTotal { get; set; }
 
-    // მხოლოდ წაკითხვისთვის — admin გვერდზე კერძის სახელის საჩვენებლად
+    // ✅ ახალი — შეკვეთის შექმნის მომენტში დაფიქსირებული სახელი
+    public string NameSnapshot { get; set; } = string.Empty;
+
+    // ⚠️ ეს property-ს დანიშნულება იცვლება: ის აღარ არის ცოცხალი JOIN-ის შედეგი,
+    // არამედ უბრალოდ NameSnapshot-ის ასლი — Admin View-ებში იმავე სახელით გამოვიყენოთ
     public string MenuItemName { get; set; } = string.Empty;
 }

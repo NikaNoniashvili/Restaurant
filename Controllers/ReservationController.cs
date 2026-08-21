@@ -84,7 +84,8 @@ public class ReservationController : ControllerBase
                 MenuItemId = reqItem.MenuItemId,
                 Quantity = reqItem.Quantity,
                 UnitPrice = unitPrice,
-                LineTotal = lineTotal
+                LineTotal = lineTotal,
+                NameSnapshot = menuItem.NameKa // ✅ სახელის snapshot შექმნის მომენტში
             });
         }
 
