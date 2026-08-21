@@ -480,20 +480,181 @@ function renderContactSection() {
 // ============================================
 // RESERVATION
 // ============================================
-let reservationCart = {}; // { menuItemId: quantity }
+let reservationCart = {};
+let selectedTableId = null;
+let selectedTableInfo = null;
 
 async function renderReservationSection() {
     const container = document.getElementById('reservation-section');
     if (!container) return;
 
+    reservationCart = {};
+    selectedTableId = null;
+    selectedTableInfo = null;
+
+    container.innerHTML = `
+        <div class="container section">
+            <!-- STEP 1: თარიღი, დრო, სტუმრები -->
+            <div class="res-step" id="resStep1">
+                <h3 class="res-menu-title">${tOr('LabelStep1', 'აირჩიეთ თარიღი, დრო და სტუმრების რაოდენობა')}</h3>
+                <div class="res-form-grid">
+                    <div class="res-field">
+                        <label>${tOr('LabelDate', 'თარიღი')}</label>
+                        <input type="date" id="resDate" required />
+                        <span class="field-error" id="resDateError"></span>
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelTime', 'დრო')}</label>
+                        <input type="time" id="resTime" required />
+                    </div>
+                    <div class="res-field">
+                        <label>${tOr('LabelGuests', 'სტუმრების რაოდენობა')}</label>
+                        <input type="number" id="resGuests" min="1" value="2" required />
+                    </div>
+                </div>
+                <button type="button" class="btn btn-gold" id="findTablesBtn" style="margin-top:16px;">${tOr('BtnFindTables', 'თავისუფალი მაგიდების ძიება')}</button>
+            </div>
+
+            <!-- STEP 2: მაგიდის არჩევა -->
+            <div class="res-step" id="resStep2" style="display:none;">
+                <h3 class="res-menu-title">${tOr('LabelStep2', 'აირჩიეთ მაგიდა')}</h3>
+                <div id="tablesGrid" class="tables-select-grid"></div>
+                <button type="button" class="pay-btn cancel-btn" id="backToStep1Btn" style="margin-top:16px; max-width:200px;">← უკან</button>
+            </div>
+
+            <!-- STEP 3: ფორმა + მენიუ -->
+            <div class="res-step" id="resStep3" style="display:none;">
+                <div class="res-selected-table" id="selectedTableBanner"></div>
+
+                <form id="reservationForm" class="reservation-form">
+                    <div class="res-form-grid">
+                        <div class="res-field">
+                            <label>${tOr('LabelName', 'სახელი')}</label>
+                            <input type="text" id="resName" required minlength="2" maxlength="10" placeholder="მხოლოდ ასოები" />
+                            <span class="field-error" id="resNameError"></span>
+                        </div>
+                        <div class="res-field">
+                            <label>${tOr('LabelPhoneField', 'ტელეფონი')}</label>
+                            <input type="tel" id="resPhone" required maxlength="9" inputmode="numeric" placeholder="9 ციფრი" />
+                            <span class="field-error" id="resPhoneError"></span>
+                        </div>
+                    </div>
+
+                    <h3 class="res-menu-title">${tOr('LabelChooseFood', 'აირჩიეთ კერძები')}</h3>
+                    <div class="res-menu-list" id="resMenuList"></div>
+
+                    <div class="res-summary" id="resSummary">
+                        <div class="res-summary-row"><span>${tOr('LabelTotal', 'სრული თანხა')}</span><span id="resTotal">0.00₾</span></div>
+                        <div class="res-summary-row"><span>${tOr('LabelPrepaid', 'წინასწარ გადასახდელი (50%)')}</span><span id="resPrepaid">0.00₾</span></div>
+                        <div class="res-summary-row"><span>${tOr('LabelRemaining', 'დარჩენილი (რესტორანში)')}</span><span id="resRemaining">0.00₾</span></div>
+                    </div>
+
+                    <div id="resMessage" class="res-message"></div>
+
+                    <button type="submit" class="btn btn-gold res-submit-btn">${tOr('BtnSubmitReservation', 'დაჯავშნა')}</button>
+                </form>
+            </div>
+        </div>
+    `;
+
+    initStep1();
+}
+
+function initStep1() {
+    const dateInput = document.getElementById('resDate');
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    dateInput.setAttribute('min', tomorrow.toISOString().split('T')[0]);
+
+    document.getElementById('findTablesBtn').addEventListener('click', findAvailableTables);
+}
+
+async function findAvailableTables() {
+    const dateInput = document.getElementById('resDate');
+    const timeInput = document.getElementById('resTime');
+    const guestsInput = document.getElementById('resGuests');
+    const dateError = document.getElementById('resDateError');
+
+    dateError.textContent = '';
+    dateInput.classList.remove('field-invalid');
+
+    const dateVal = dateInput.value;
+    const timeVal = timeInput.value;
+    const guestsVal = parseInt(guestsInput.value);
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+
+    if (!dateVal || new Date(dateVal) < tomorrow) {
+        dateError.textContent = 'დაჯავშნა შესაძლებელია მხოლოდ ხვალინდელი დღიდან';
+        dateInput.classList.add('field-invalid');
+        return;
+    }
+    if (!timeVal || !guestsVal || guestsVal < 1) {
+        return;
+    }
+
+    const btn = document.getElementById('findTablesBtn');
+    btn.disabled = true;
+    btn.textContent = 'იძებნება...';
+
+    try {
+        const res = await fetch(`/api/Reservation/AvailableTables?date=${dateVal}&time=${timeVal}&guests=${guestsVal}`);
+        const tables = await res.json();
+
+        const grid = document.getElementById('tablesGrid');
+
+        if (!tables || tables.length === 0) {
+            grid.innerHTML = `<div class="empty-msg">🔴 არჩეულ დროს თავისუფალი მაგიდა არ არის.</div>`;
+        } else {
+            grid.innerHTML = tables.map(t => `
+                <div class="table-select-card" data-table-id="${t.id}" data-table-number="${t.tableNumber}" data-table-capacity="${t.capacity}">
+                    <div class="ts-icon">🪑</div>
+                    <div class="ts-name">მაგიდა №${t.tableNumber}</div>
+                    <div class="ts-cap">${t.capacity} ადგილი</div>
+                    <div class="ts-status">🟢 თავისუფალია</div>
+                    <button type="button" class="btn-small btn-assign ts-choose-btn">არჩევა</button>
+                </div>
+            `).join('');
+
+            grid.querySelectorAll('.ts-choose-btn').forEach(b => {
+                b.addEventListener('click', (e) => {
+                    const card = e.target.closest('.table-select-card');
+                    selectedTableId = parseInt(card.dataset.tableId);
+                    selectedTableInfo = { number: card.dataset.tableNumber, capacity: card.dataset.tableCapacity };
+                    goToStep3();
+                });
+            });
+        }
+
+        document.getElementById('resStep1').style.display = 'none';
+        document.getElementById('resStep2').style.display = 'block';
+
+        document.getElementById('backToStep1Btn').addEventListener('click', () => {
+            document.getElementById('resStep2').style.display = 'none';
+            document.getElementById('resStep1').style.display = 'block';
+        });
+
+    } catch (err) {
+        console.error(err);
+    }
+
+    btn.disabled = false;
+    btn.textContent = tOr('BtnFindTables', 'თავისუფალი მაგიდების ძიება');
+}
+
+async function goToStep3() {
+    document.getElementById('resStep2').style.display = 'none';
+    document.getElementById('resStep3').style.display = 'block';
+
+    document.getElementById('selectedTableBanner').innerHTML =
+        `🪑 არჩეული მაგიდა: <strong>№${selectedTableInfo.number}</strong> (${selectedTableInfo.capacity} ადგილი) — ${document.getElementById('resDate').value}, ${document.getElementById('resTime').value}`;
+
     const [categories, items] = await Promise.all([
         API.get('MenuCategory', currentLang),
         API.get('MenuItem', currentLang)
     ]);
-
-    if (!categories || !items) return;
-
-    reservationCart = {};
 
     let menuHtml = '';
     categories.forEach(cat => {
@@ -504,7 +665,7 @@ async function renderReservationSection() {
         const step = isKhinkali ? 5 : 1;
 
         const itemsHtml = catItems.map(item => `
-    <div class="res-item-row" data-item-id="${item.id}" data-price="${item.price}" data-step="${step}">
+            <div class="res-item-row" data-item-id="${item.id}" data-price="${item.price}" data-step="${step}">
                 <div class="res-item-info">
                     <span class="res-item-name">${item.name}</span>
                     <span class="res-item-price">${fmtPrice(item.price)}</span>
@@ -517,70 +678,10 @@ async function renderReservationSection() {
             </div>
         `).join('');
 
-        menuHtml += `
-            <div class="res-category-block">
-                <h4 class="res-category-title">${cat.name}</h4>
-                ${itemsHtml}
-            </div>
-        `;
+        menuHtml += `<div class="res-category-block"><h4 class="res-category-title">${cat.name}</h4>${itemsHtml}</div>`;
     });
 
-    container.innerHTML = `
-        <div class="container section">
-            <form id="reservationForm" class="reservation-form">
-                <div class="res-form-grid">
-                   <div class="res-field">
-    <label>${tOr('LabelName', 'სახელი')}</label>
-    <input type="text" id="resName" required minlength="2" maxlength="10" placeholder="მხოლოდ ასოები" />
-    <span class="field-error" id="resNameError"></span>
-</div>
-<div class="res-field">
-    <label>${tOr('LabelPhoneField', 'ტელეფონი')}</label>
-    <input type="tel" id="resPhone" required maxlength="9" inputmode="numeric" placeholder="9 ციფრი, მაგ: 555223344" />
-    <span class="field-error" id="resPhoneError"></span>
-</div>
-<div class="res-field">
-    <label>${tOr('LabelDate', 'თარიღი')}</label>
-    <input type="date" id="resDate" required />
-    <span class="field-error" id="resDateError"></span>
-</div>
-                    <div class="res-field">
-                        <label>${tOr('LabelTime', 'დრო')}</label>
-                        <input type="time" id="resTime" required />
-                    </div>
-                    <div class="res-field">
-                        <label>${tOr('LabelGuests', 'სტუმრების რაოდენობა')}</label>
-                        <input type="number" id="resGuests" min="1" value="1" required />
-                    </div>
-                </div>
-
-                <h3 class="res-menu-title">${tOr('LabelChooseFood', 'აირჩიეთ კერძები')}</h3>
-                <div class="res-menu-list">
-                    ${menuHtml}
-                </div>
-
-                <div class="res-summary" id="resSummary">
-                    <div class="res-summary-row">
-                        <span>${tOr('LabelTotal', 'სრული თანხა')}</span>
-                        <span id="resTotal">0.00₾</span>
-                    </div>
-                    <div class="res-summary-row">
-                        <span>${tOr('LabelPrepaid', 'წინასწარ გადასახდელი (50%)')}</span>
-                        <span id="resPrepaid">0.00₾</span>
-                    </div>
-                    <div class="res-summary-row">
-                        <span>${tOr('LabelRemaining', 'დარჩენილი (რესტორანში)')}</span>
-                        <span id="resRemaining">0.00₾</span>
-                    </div>
-                </div>
-
-                <div id="resMessage" class="res-message"></div>
-
-                <button type="submit" class="btn btn-gold res-submit-btn">${tOr('BtnSubmitReservation', 'დაჯავშნა')}</button>
-            </form>
-        </div>
-    `;
-
+    document.getElementById('resMenuList').innerHTML = menuHtml;
     initReservationForm();
 }
 
@@ -610,16 +711,6 @@ function initReservationForm() {
         });
     });
 
-    // ✅ თარიღის მინიმუმი — ხვალინდელი დღე (დღეს დაჯავშნა აკრძალულია)
-    const dateInput = document.getElementById('resDate');
-    if (dateInput) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const minDate = tomorrow.toISOString().split('T')[0];
-        dateInput.setAttribute('min', minDate);
-    }
-
-    // ✅ სახელის ველი — მხოლოდ ასოები (ქართული/ლათინური), ციფრი/სიმბოლო/emoji დაუყოვნებლივ იბლოკება
     const nameInput = document.getElementById('resName');
     if (nameInput) {
         nameInput.addEventListener('input', () => {
@@ -627,7 +718,6 @@ function initReservationForm() {
         });
     }
 
-    // ✅ ტელეფონის ველი — მხოლოდ ციფრები, მაქსიმუმ 9
     const phoneInput = document.getElementById('resPhone');
     if (phoneInput) {
         phoneInput.addEventListener('input', () => {
@@ -642,7 +732,6 @@ function updateReservationUI(itemId) {
     const qty = reservationCart[itemId] || 0;
     const qtyEl = document.getElementById(`qty-${itemId}`);
     if (qtyEl) qtyEl.textContent = qty;
-
     recalcReservationTotals();
 }
 
@@ -674,65 +763,29 @@ async function submitReservation(e) {
 
     const nameInput = document.getElementById('resName');
     const phoneInput = document.getElementById('resPhone');
-    const dateInput = document.getElementById('resDate');
-    const timeInput = document.getElementById('resTime');
-    const guestsInput = document.getElementById('resGuests');
 
-    // ველების error-ებისა და წითელი ჩარჩოების გასუფთავება
-    [nameInput, phoneInput, dateInput, timeInput, guestsInput].forEach(el => el.classList.remove('field-invalid'));
+    [nameInput, phoneInput].forEach(el => el.classList.remove('field-invalid'));
     document.getElementById('resNameError').textContent = '';
     document.getElementById('resPhoneError').textContent = '';
-    document.getElementById('resDateError').textContent = '';
 
     const nameVal = nameInput.value.trim();
     const phoneVal = phoneInput.value.trim();
-    const dateVal = dateInput.value;
-    const timeVal = timeInput.value;
-    const guestsVal = guestsInput.value;
 
     let hasError = false;
 
-    // ✅ სახელის ვალიდაცია — 2-10 ასო, მხოლოდ ასოები
     if (nameVal.length < 2 || nameVal.length > 10 || !/^[a-zA-Zა-ჰ]+$/.test(nameVal)) {
         document.getElementById('resNameError').textContent = 'სახელი უნდა იყოს 2-10 ასო, მხოლოდ ასოებით';
         nameInput.classList.add('field-invalid');
         hasError = true;
     }
 
-    // ✅ ტელეფონის ვალიდაცია — ზუსტად 9 ციფრი
     if (!/^\d{9}$/.test(phoneVal)) {
         document.getElementById('resPhoneError').textContent = 'ტელეფონი უნდა შეიცავდეს ზუსტად 9 ციფრს';
         phoneInput.classList.add('field-invalid');
         hasError = true;
     }
 
-    // ✅ თარიღის ვალიდაცია — არანაკლებ ხვალინდელი დღისა
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    const selectedDate = dateVal ? new Date(dateVal) : null;
-
-    if (!dateVal || selectedDate < tomorrow) {
-        document.getElementById('resDateError').textContent = 'დაჯავშნა შესაძლებელია მხოლოდ ხვალინდელი დღიდან';
-        dateInput.classList.add('field-invalid');
-        hasError = true;
-    }
-
-    // ✅ დროის ვალიდაცია — სავალდებულოა
-    if (!timeVal) {
-        timeInput.classList.add('field-invalid');
-        hasError = true;
-    }
-
-    // ✅ სტუმრების რაოდენობა — სავალდებულოა, მინიმუმ 1
-    if (!guestsVal || parseInt(guestsVal) < 1) {
-        guestsInput.classList.add('field-invalid');
-        hasError = true;
-    }
-
-    if (hasError) {
-        return;
-    }
+    if (hasError) return;
 
     const items = Object.entries(reservationCart)
         .filter(([id, qty]) => qty > 0)
@@ -747,9 +800,10 @@ async function submitReservation(e) {
     const payload = {
         customerName: nameVal,
         phone: phoneVal,
-        reservationDate: dateVal,
-        reservationTime: timeVal,
-        guestCount: parseInt(guestsVal),
+        reservationDate: document.getElementById('resDate').value,
+        reservationTime: document.getElementById('resTime').value,
+        guestCount: parseInt(document.getElementById('resGuests').value),
+        tableId: selectedTableId,
         items: items
     };
 
@@ -767,6 +821,7 @@ async function submitReservation(e) {
         const data = await response.json();
 
         if (!response.ok) {
+            // 409 Conflict — მაგიდა უკვე დაიკავეს
             messageEl.textContent = data.error || tOr('ErrorGeneric', 'დაფიქსირდა შეცდომა');
             messageEl.className = 'res-message error';
             submitBtn.disabled = false;

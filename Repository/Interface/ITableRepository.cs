@@ -16,4 +16,7 @@ public interface ITableRepository
 
     // ✅ თავისუფალი მაგიდები კონკრეტულ თარიღზე, ტევადობის მიხედვით დალაგებული
     List<RestaurantTable> GetAvailableTables(DateTime date, int guestCount);
+
+    // ✅ ახალი — ზუსტი დრო+ხანგრძლივობის გათვალისწინებით
+    List<RestaurantTable> GetAvailableTablesForSlot(DateTime date, TimeSpan time, int guestCount, int durationHours, int holdMinutes);
 }

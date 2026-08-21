@@ -20,6 +20,7 @@ public class ReservationRequest
     public DateTime ReservationDate { get; set; }
     public string ReservationTime { get; set; } = string.Empty; // "18:30" ფორმატი
     public int GuestCount { get; set; }
+    public int TableId { get; set; } // ✅ ახალი — მომხმარებელი თვითონ ირჩევს
     public List<ReservationItemRequest> Items { get; set; } = new();
 }
 
@@ -29,13 +30,43 @@ public class ReservationController : ControllerBase
 {
     private readonly IReservationRepository _reservationRepository;
     private readonly IMenuItemRepository _menuItemRepository;
+    private readonly ITableRepository _tableRepository;
+    private readonly IConfiguration _configuration;
 
     public ReservationController(
         IReservationRepository reservationRepository,
-        IMenuItemRepository menuItemRepository)
+        IMenuItemRepository menuItemRepository,
+        ITableRepository tableRepository,
+        IConfiguration configuration)
     {
         _reservationRepository = reservationRepository;
         _menuItemRepository = menuItemRepository;
+        _tableRepository = tableRepository;
+        _configuration = configuration;
+    }
+
+    // ==========================================
+    // ✅ GET — თავისუფალი მაგიდები კონკრეტული თარიღი/დრო/სტუმრებისთვის
+    // ==========================================
+    [HttpGet("AvailableTables")]
+    public IActionResult AvailableTables([FromQuery] DateTime date, [FromQuery] string time, [FromQuery] int guests)
+    {
+        if (!TimeSpan.TryParse(time, out var parsedTime))
+            return BadRequest(new { error = "დროის ფორმატი არასწორია" });
+
+        int durationHours = _configuration.GetValue<int>("ReservationSettings:DefaultDurationHours", 6);
+        int holdMinutes = _configuration.GetValue<int>("ReservationSettings:HoldMinutes", 10);
+
+        var tables = _tableRepository.GetAvailableTablesForSlot(date, parsedTime, guests, durationHours, holdMinutes);
+
+        var result = tables.Select(t => new
+        {
+            t.Id,
+            t.TableNumber,
+            t.Capacity
+        });
+
+        return Ok(result);
     }
 
     // ==========================================
@@ -54,11 +85,26 @@ public class ReservationController : ControllerBase
         if (request.GuestCount <= 0)
             return BadRequest(new { error = "სტუმრების რაოდენობა უნდა იყოს 1 ან მეტი" });
 
+        if (request.TableId <= 0)
+            return BadRequest(new { error = "გთხოვთ აირჩიოთ მაგიდა" });
+
         if (request.Items == null || request.Items.Count == 0)
             return BadRequest(new { error = "მინიმუმ ერთი კერძი უნდა აირჩიოთ" });
 
         if (!TimeSpan.TryParse(request.ReservationTime, out var parsedTime))
             return BadRequest(new { error = "დროის ფორმატი არასწორია" });
+
+        int durationHours = _configuration.GetValue<int>("ReservationSettings:DefaultDurationHours", 6);
+        int holdMinutes = _configuration.GetValue<int>("ReservationSettings:HoldMinutes", 10);
+
+        // ✅ პირველადი შემოწმება (submit-მდე) — სწრაფი feedback, საბოლოო დაცვა ხდება Repository-ის ტრანზაქციაში
+        var availableTables = _tableRepository.GetAvailableTablesForSlot(
+            request.ReservationDate, parsedTime, request.GuestCount, durationHours, holdMinutes);
+
+        if (!availableTables.Any(t => t.Id == request.TableId))
+        {
+            return BadRequest(new { error = "სამწუხაროდ, ეს მაგიდა ამ დროისთვის უკვე დაჯავშნილია. გთხოვთ აირჩიოთ სხვა მაგიდა ან სხვა დრო." });
+        }
 
         // ⚠️ ყველა კერძის რეალური ფასი ბაზიდან წამოვიღოთ — client-ის ფასს არასდროს ვენდობით
         var allMenuItems = _menuItemRepository.GetAll();
@@ -74,7 +120,6 @@ public class ReservationController : ControllerBase
             if (menuItem == null)
                 return BadRequest(new { error = $"კერძი ID={reqItem.MenuItemId} ვერ მოიძებნა" });
 
-            // ✅ ფასი მხოლოდ სერვერზე, ბაზიდან
             decimal unitPrice = menuItem.Price;
             decimal lineTotal = unitPrice * reqItem.Quantity;
             totalAmount += lineTotal;
@@ -85,7 +130,7 @@ public class ReservationController : ControllerBase
                 Quantity = reqItem.Quantity,
                 UnitPrice = unitPrice,
                 LineTotal = lineTotal,
-                NameSnapshot = menuItem.NameKa // ✅ სახელის snapshot შექმნის მომენტში
+                NameSnapshot = menuItem.NameKa
             });
         }
 
@@ -99,17 +144,24 @@ public class ReservationController : ControllerBase
             ReservationDate = request.ReservationDate.Date,
             ReservationTime = parsedTime,
             GuestCount = request.GuestCount,
+            TableId = request.TableId,
             TotalAmount = totalAmount,
             PrepaidAmount = prepaidAmount,
             RemainingAmount = remainingAmount,
-            ReservationStatus = "Active"
+            ReservationStatus = "Pending"
         };
 
-        int newId = _reservationRepository.Create(reservation, reservationItems);
+        // ✅ საბოლოო, ტრანზაქციის შიგნით დაცული შემოწმება + შექმნა
+        var result = _reservationRepository.Create(reservation, reservationItems, durationHours, holdMinutes);
+
+        if (!result.Success)
+        {
+            return Conflict(new { error = result.ErrorMessage });
+        }
 
         return Ok(new
         {
-            reservationId = newId,
+            reservationId = result.ReservationId,
             totalAmount,
             prepaidAmount,
             remainingAmount
@@ -117,7 +169,7 @@ public class ReservationController : ControllerBase
     }
 
     // ==========================================
-    // GET — ყველა ჯავშანი (Admin გვერდისთვის)
+    // GET — ყველა ჯავშანი (ძველი Admin API-ისთვის, დარჩა თავსებადობისთვის)
     // ==========================================
     [HttpGet]
     public IActionResult GetAll()

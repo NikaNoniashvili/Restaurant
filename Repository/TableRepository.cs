@@ -227,4 +227,55 @@ public class TableRepository : ITableRepository
             IsActive = Convert.ToBoolean(reader["IsActive"])
         };
     }
+
+    // ==========================================
+    // ✅ GetAvailableTablesForSlot — ზუსტი overlap-შემოწმება
+    // ==========================================
+    public List<RestaurantTable> GetAvailableTablesForSlot(DateTime date, TimeSpan time, int guestCount, int durationHours, int holdMinutes)
+    {
+        var newStart = date.Date + time;
+        var newEnd = newStart.AddHours(durationHours);
+
+        var tables = new List<RestaurantTable>();
+
+        using (var connection = (SqlConnection)_databaseService.GetConnection())
+        {
+            connection.Open();
+
+            string query = @"
+            SELECT t.Id, t.TableNumber, t.Capacity, t.IsActive
+            FROM [Table] t
+            WHERE t.IsActive = 1 AND t.Capacity >= @GuestCount
+              AND t.Id NOT IN (
+                  SELECT r.TableId
+                  FROM Reservation r
+                  WHERE r.TableId IS NOT NULL
+                    AND (
+                        r.ReservationStatus IN ('Confirmed', 'InProgress')
+                        OR (r.ReservationStatus = 'Pending' AND r.CreatedAt >= DATEADD(MINUTE, -@HoldMinutes, GETDATE()))
+                    )
+                    AND (CAST(r.ReservationDate AS DATETIME) + CAST(r.ReservationTime AS DATETIME)) < @NewEnd
+                    AND r.EstimatedEndDateTime > @NewStart
+              )
+            ORDER BY t.Capacity ASC";
+
+            using (var cmd = new SqlCommand(query, connection))
+            {
+                cmd.Parameters.AddWithValue("@GuestCount", guestCount);
+                cmd.Parameters.AddWithValue("@HoldMinutes", holdMinutes);
+                cmd.Parameters.AddWithValue("@NewStart", newStart);
+                cmd.Parameters.AddWithValue("@NewEnd", newEnd);
+
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        tables.Add(MapTable(reader));
+                    }
+                }
+            }
+        }
+
+        return tables;
+    }
 }

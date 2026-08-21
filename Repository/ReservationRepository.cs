@@ -17,27 +17,66 @@ public class ReservationRepository : IReservationRepository
     // ==========================================
     // Create — ჯავშანი + მისი items ერთ ტრანზაქციაში
     // ==========================================
-    public int Create(Reservation reservation, List<ReservationItem> items)
+    public CreateReservationResult Create(Reservation reservation, List<ReservationItem> items, int durationHours, int holdMinutes)
     {
         using (var connection = (SqlConnection)_databaseService.GetConnection())
         {
             connection.Open();
-            using (var transaction = connection.BeginTransaction())
+            using (var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable))
             {
                 try
                 {
+                    var newStart = reservation.ReservationDate.Date + reservation.ReservationTime;
+                    var newEnd = newStart.AddHours(durationHours);
+
+                    // ✅ საბოლოო, ტრანზაქციის შიგნით შემოწმება — race condition-ისგან დაცვა
+                    // UPDLOCK + HOLDLOCK უზრუნველყოფს, რომ ამ ტრანზაქციის დასრულებამდე
+                    // არავითარ სხვა პარალელურ მოთხოვნას არ შეეძლოს იმავე მაგიდის იგივე
+                    // დროის მონაკვეთის "დანახვა" თავისუფლად
+                    string checkQuery = @"
+                    SELECT COUNT(*) FROM Reservation WITH (UPDLOCK, HOLDLOCK)
+                    WHERE TableId = @TableId
+                      AND (
+                          ReservationStatus IN ('Confirmed', 'InProgress')
+                          OR (ReservationStatus = 'Pending' AND CreatedAt >= DATEADD(MINUTE, -@HoldMinutes, GETDATE()))
+                      )
+                      AND (CAST(ReservationDate AS DATETIME) + CAST(ReservationTime AS DATETIME)) < @NewEnd
+                      AND EstimatedEndDateTime > @NewStart";
+
+                    int conflictCount;
+                    using (var checkCmd = new SqlCommand(checkQuery, connection, transaction))
+                    {
+                        checkCmd.Parameters.AddWithValue("@TableId", reservation.TableId!.Value);
+                        checkCmd.Parameters.AddWithValue("@HoldMinutes", holdMinutes);
+                        checkCmd.Parameters.AddWithValue("@NewStart", newStart);
+                        checkCmd.Parameters.AddWithValue("@NewEnd", newEnd);
+                        conflictCount = (int)checkCmd.ExecuteScalar();
+                    }
+
+                    if (conflictCount > 0)
+                    {
+                        transaction.Rollback();
+                        return new CreateReservationResult
+                        {
+                            Success = false,
+                            ErrorMessage = "სამწუხაროდ, ეს მაგიდა ამ დროისთვის უკვე დაჯავშნილია. გთხოვთ აირჩიოთ სხვა მაგიდა ან სხვა დრო."
+                        };
+                    }
+
                     int reservationId;
 
                     string insertReservation = @"
-                        INSERT INTO Reservation 
-                            (CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
-                             TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
-                             IsActive, DepositPaymentStatus, FinalPaymentStatus, TableId, ActualStartTime, ActualEndTime)
-                        OUTPUT INSERTED.Id
-                        VALUES 
-                            (@CustomerName, @Phone, @ReservationDate, @ReservationTime, @GuestCount,
-                             @TotalAmount, @PrepaidAmount, @RemainingAmount, @ReservationStatus, @CreatedAt,
-                             @IsActive, @DepositPaymentStatus, @FinalPaymentStatus, NULL, NULL, NULL)";
+                    INSERT INTO Reservation 
+                        (CustomerName, Phone, ReservationDate, ReservationTime, GuestCount,
+                         TotalAmount, PrepaidAmount, RemainingAmount, ReservationStatus, CreatedAt,
+                         IsActive, DepositPaymentStatus, FinalPaymentStatus, TableId, ActualStartTime, ActualEndTime,
+                         EstimatedEndDateTime)
+                    OUTPUT INSERTED.Id
+                    VALUES 
+                        (@CustomerName, @Phone, @ReservationDate, @ReservationTime, @GuestCount,
+                         @TotalAmount, @PrepaidAmount, @RemainingAmount, @ReservationStatus, @CreatedAt,
+                         @IsActive, @DepositPaymentStatus, @FinalPaymentStatus, @TableId, NULL, NULL,
+                         @EstimatedEndDateTime)";
 
                     using (var cmd = new SqlCommand(insertReservation, connection, transaction))
                     {
@@ -54,13 +93,15 @@ public class ReservationRepository : IReservationRepository
                         cmd.Parameters.AddWithValue("@IsActive", true);
                         cmd.Parameters.AddWithValue("@DepositPaymentStatus", "Unpaid");
                         cmd.Parameters.AddWithValue("@FinalPaymentStatus", "Unpaid");
+                        cmd.Parameters.AddWithValue("@TableId", reservation.TableId!.Value);
+                        cmd.Parameters.AddWithValue("@EstimatedEndDateTime", newEnd);
 
                         reservationId = (int)cmd.ExecuteScalar();
                     }
 
                     string insertItem = @"
-    INSERT INTO ReservationItem (ReservationId, MenuItemId, Quantity, UnitPrice, LineTotal, NameSnapshot)
-    VALUES (@ReservationId, @MenuItemId, @Quantity, @UnitPrice, @LineTotal, @NameSnapshot)";
+                    INSERT INTO ReservationItem (ReservationId, MenuItemId, Quantity, UnitPrice, LineTotal, NameSnapshot)
+                    VALUES (@ReservationId, @MenuItemId, @Quantity, @UnitPrice, @LineTotal, @NameSnapshot)";
 
                     foreach (var item in items)
                     {
@@ -77,7 +118,12 @@ public class ReservationRepository : IReservationRepository
                     }
 
                     transaction.Commit();
-                    return reservationId;
+
+                    return new CreateReservationResult
+                    {
+                        Success = true,
+                        ReservationId = reservationId
+                    };
                 }
                 catch
                 {

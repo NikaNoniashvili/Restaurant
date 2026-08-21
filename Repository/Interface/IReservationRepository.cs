@@ -4,7 +4,7 @@ namespace Restaurant.Repository.Interface;
 
 public interface IReservationRepository
 {
-    int Create(Reservation reservation, List<ReservationItem> items);
+    CreateReservationResult Create(Reservation reservation, List<ReservationItem> items, int durationHours, int holdMinutes);
     List<Reservation> GetAll();
     Reservation? GetById(int id);
     List<Reservation> GetByDate(DateTime date);
